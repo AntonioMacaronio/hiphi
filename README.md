@@ -1,5 +1,7 @@
 # HiPHI
 
+Local project workflow: [stage-1 collection and Viser playback](docs/stage1_collection.md).
+
 <video controls autoplay muted loop playsinline width="100%" src="https://huggingface.co/datasets/noitomrobotics/HiPHI/resolve/main/assets/HiPHI_demo_video.mp4"></video>
 
 **A large-scale benchmark for high-precision human motion and object interaction.**

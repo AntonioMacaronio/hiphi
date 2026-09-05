@@ -2,3 +2,12 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Downloaded data and generated outputs belong under /data/sky/projects/hiphi.
+/data/
+/datasets/
+/HiPHI/
+/object_meshes/
+/outputs/
+/runs/
+/.cache/
