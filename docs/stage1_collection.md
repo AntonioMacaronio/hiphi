@@ -4,6 +4,10 @@ The `hiphi` fork owns dataset acquisition, raw-data inspection, and the Viser vi
 `FAR-Holosoma` owns robot retargeting, simulation, and policy training. Keep the repositories
 as siblings; the simulator consumes data paths rather than importing the entire HiPHI website.
 
+For the complete release, see the [raw dataset and S3 guide](../../FAR-Holosoma/projectpivot-docs/hiphi-raw-dataset.md).
+It documents the separate full archive mirror and selective/full extraction commands;
+the 50-clip pilot below remains available at its original path.
+
 ```text
 /home/sky/sky_workdir/heavyhumanoid/
 ├── hiphi/                              # AntonioMacaronio fork; source only
@@ -97,10 +101,11 @@ source scripts/project_env.sh
 "$HIPHI_PYTHON" scripts/view_stage1_viser.py --port 8667
 ```
 
-Open `http://127.0.0.1:8667` on the server, or forward port 8667 with your IDE/SSH.
-Read Viser's banner for the actual port if another viewer already occupies it.
+Open the public share URL printed at startup; these links expire. For local access,
+use `--no-share` and open `http://127.0.0.1:8667`, forwarding the port with your IDE/SSH
+if needed. Read Viser's banner for the actual port if another viewer already occupies it.
 The viewer offers a motion selector, play/pause, a source-frame slider, playback speed,
-an FPS slider (1–90, default 30), and camera reset. The blue skeleton and orange tracked
+an FPS slider (1–90, default 90), and camera reset. The blue skeleton and orange tracked
 meshes share the same coordinate frame. Only one clip is loaded at a time. FPS changes
 the display update rate immediately; Speed controls how fast the motion plays.
 No GPU or package installation is needed in this node's `ei_world_model` environment.
@@ -119,6 +124,8 @@ not a robot-retargeted simulation.
 
 ## Next step
 
-Visually review representative clips and their lowering/release phases. Then implement
-interaction-preserving G1 retargeting in FAR-Holosoma, writing derived data under that
-project's `/data` directory while preserving source motion IDs, actor IDs, and timestamps.
+Review the [first eight trial proposals](trial_segmentation.md): five carry trials
+and three placing trials from the two recordings already retargeted in FAR-Holosoma.
+The trial viewer loops original frame ranges and shows ambiguous boundaries. Human
+outcomes remain unreviewed and robot success remains unset. Finalize the ranges
+before retargeting a new robot reference set and testing it through CF-Track.

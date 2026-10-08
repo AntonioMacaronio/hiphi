@@ -3,17 +3,21 @@
 
 Run after sourcing scripts/project_env.sh. Only the selected clip is loaded;
 meshes are sent once per selection. Adjust display FPS with the viewer slider
-(1–90 FPS, default 30); the separate Speed slider controls playback speed.
+(1–90 FPS, default 90); the separate Speed slider controls playback speed.
 
 Examples (run from /home/sky/sky_workdir/heavyhumanoid/hiphi):
     source scripts/project_env.sh
     "$HIPHI_PYTHON" scripts/view_stage1_viser.py --port 8667
     "$HIPHI_PYTHON" scripts/view_stage1_viser.py --no-share
     "$HIPHI_PYTHON" scripts/view_stage1_viser.py --data-root /data/sky/projects/hiphi/datasets/stage1_v1/HiPHI
+    "$HIPHI_PYTHON" scripts/view_stage1_viser.py \
+        --trial-manifest /data/sky/projects/hiphi/runs/trials_v1/trials.json --port 8671
 
-Open http://127.0.0.1:8667 (forward the port over SSH/your IDE for remote use).
-A public Viser URL is requested by default; use --no-share for local access only.
+Open the public Viser URL printed at startup; it is requested by default and expires.
+Use --no-share for local access at http://127.0.0.1:8667 (forward the port for remote use).
 Press Ctrl+C to stop.
+With --trial-manifest, choose a proposed trial to loop its original source frame
+range. Full recording restores surrounding context. Annotations are read-only.
 """
 from __future__ import annotations
 
@@ -43,6 +47,8 @@ class ViewerArgs:
     port: int = 8667
     # Request a public Viser share URL; disable with --no-share.
     share: bool = True
+    # Optional source-trial manifest for bounded playback and outcome review.
+    trial_manifest: Path | None = None
 
 
 @dataclass
@@ -133,6 +139,15 @@ def discover(root):
 def serve(args):
     root = args.data_root.expanduser().resolve()
     choices = discover(root)
+    trial_groups = {}
+    if args.trial_manifest is not None:
+        from segment_box_trials import validate_manifest
+
+        manifest = json.loads(args.trial_manifest.read_text())
+        validate_manifest(manifest, root)
+        for trial in manifest["trials"]:
+            trial_groups.setdefault(trial["motion_id"], {})[trial["trial_id"]] = trial
+        choices = {label: path for label, path in choices.items() if path.name in trial_groups}
     if not choices:
         raise SystemExit(f"No extracted HiPHI motion packages found under {root / 'data'}")
     server = viser.ViserServer(host=args.host, port=args.port, label="HiPHI · motion preview")
@@ -141,10 +156,14 @@ def serve(args):
                           cell_color=(210, 218, 225), section_color=(160, 174, 188))
     first = next((name for name in choices if name.startswith("Bringing-carry")), next(iter(choices)))
     selector = server.gui.add_dropdown("Motion", list(choices), initial_value=first)
+    trial_selector = None
+    if args.trial_manifest is not None:
+        trial_selector = server.gui.add_dropdown("Trial", ["Full recording"], initial_value="Full recording")
+        trial_info = server.gui.add_markdown("")
     play = server.gui.add_checkbox("Play", initial_value=False)
     frame = server.gui.add_slider("Frame", min=0, max=1, step=1, initial_value=0)
     speed = server.gui.add_slider("Speed", min=0.25, max=2.0, step=0.25, initial_value=1.0)
-    fps = server.gui.add_slider("FPS", min=1, max=90, step=1, initial_value=30,
+    fps = server.gui.add_slider("FPS", min=1, max=90, step=1, initial_value=90,
                                 hint="Display update rate. Use Speed to change playback speed.")
     reset = server.gui.add_button("Reset camera")
     info = server.gui.add_markdown("Loading motion…")
@@ -168,6 +187,8 @@ def serve(args):
     print(f"Ready: {len(choices)} clips from {root}. PID: {os.getpid()}", flush=True)
     print("Use the URL/port in Viser's banner; a busy requested port may be changed by Viser.", flush=True)
     current_name, motion, handles = None, None, []
+    selected_trial = None
+    range_start, range_stop = 0, 1
     playhead, last_frame = 0.0, -1
     previous_time = time.monotonic()
     try:
@@ -205,8 +226,15 @@ def serve(args):
                                                                position=obj["positions"][0], wxyz=obj["wxyz"][0])
                         object_handles.append(handle)
                         handles.append(handle)
-                    frame.value = 0
+                    frame.min = 0
                     frame.max = len(motion.positions) - 1
+                    frame.value = 0
+                range_start, range_stop = 0, len(motion.positions)
+                selected_trial = None
+                if trial_selector is not None:
+                    options = ["Full recording", *trial_groups.get(motion.metadata["motion_id"], {})]
+                    trial_selector.options = options
+                    trial_selector.value = options[1] if len(options) > 1 else options[0]
                 playhead, last_frame = 0.0, -1
                 center = motion.positions[0].mean(axis=0)
                 for client in server.get_clients().values():
@@ -220,10 +248,40 @@ def serve(args):
                 elapsed = 0
                 print("Loaded:", metadata["motion_id"], flush=True)
             if motion is not None:
+                if trial_selector is not None and trial_selector.value != selected_trial:
+                    selected_trial = trial_selector.value
+                    play.value = False
+                    if selected_trial == "Full recording":
+                        range_start, range_stop = 0, len(motion.positions)
+                        trial_info.content = "Full source recording; select a trial to loop its proposed boundaries."
+                    else:
+                        trial = trial_groups[motion.metadata["motion_id"]][selected_trial]
+                        range_start, range_stop = trial["start_frame"], trial["stop_frame"]
+                        flags = ", ".join(trial["flags"]) or "No boundary flags"
+                        trial_info.content = (
+                            f"**Source frames [{range_start}, {range_stop})** · "
+                            f"{(range_stop - range_start) * motion.frame_time:.2f} s\n\n"
+                            f"Human outcome: **{trial['human_outcome']}** · {trial['review_status']}\n\n"
+                            f"Robot execution: **{trial['robot_execution']['status']}**\n\n"
+                            f"Review flags: {flags}\n\n"
+                            "Proposals use geometry; they do not establish physical contact or task success."
+                        )
+                    with server.atomic():
+                        frame.min = 0
+                        frame.max = range_stop - 1
+                        frame.min = range_start
+                        frame.value = range_start
+                    playhead, last_frame = float(range_start), -1
+                    center = motion.positions[range_start].mean(axis=0)
+                    for client in server.get_clients().values():
+                        set_camera(client)
+                    elapsed = 0
                 if frame.value != last_frame:
                     playhead = float(frame.value)
                 if play.value:
-                    playhead = (playhead + elapsed * speed.value / motion.frame_time) % len(motion.positions)
+                    playhead = range_start + (
+                        playhead - range_start + elapsed * speed.value / motion.frame_time
+                    ) % (range_stop - range_start)
                 index = int(playhead)
                 if index != last_frame:
                     with server.atomic():
@@ -234,7 +292,8 @@ def serve(args):
                             handle.wxyz = obj["wxyz"][index]
                         frame.value = index
                     last_frame = index
-                    clock.content = f"{index * motion.frame_time:.2f} / {(len(motion.positions)-1) * motion.frame_time:.2f} s"
+                    clock.content = (f"Source frame **{index}** · {index * motion.frame_time:.2f} s\n\n"
+                                     f"Playback range: {range_start}–{range_stop - 1}")
             time.sleep(max(0.001, 1 / fps.value - (time.monotonic() - now)))
     except KeyboardInterrupt:
         pass
